@@ -1,10 +1,10 @@
-const Notification = require('../models/Notification');
+const Notification = require('../models/Notification'); // MongoDB
 
 // GET /api/notifications
 exports.getNotifications = async (req, res, next) => {
   try {
     const { read, page = 1, limit = 20 } = req.query;
-    const filter = { user: req.user._id };
+    const filter = { userId: req.user.id };
 
     if (read !== undefined) filter.read = read === 'true';
 
@@ -15,7 +15,7 @@ exports.getNotifications = async (req, res, next) => {
         .skip(skip)
         .limit(parseInt(limit)),
       Notification.countDocuments(filter),
-      Notification.countDocuments({ user: req.user._id, read: false }),
+      Notification.countDocuments({ userId: req.user.id, read: false }),
     ]);
 
     res.json({
@@ -32,7 +32,7 @@ exports.getNotifications = async (req, res, next) => {
 exports.markAsRead = async (req, res, next) => {
   try {
     const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.id, user: req.user._id },
+      { _id: req.params.id, userId: req.user.id },
       { read: true },
       { new: true }
     );
@@ -51,7 +51,7 @@ exports.markAsRead = async (req, res, next) => {
 exports.markAllAsRead = async (req, res, next) => {
   try {
     await Notification.updateMany(
-      { user: req.user._id, read: false },
+      { userId: req.user.id, read: false },
       { read: true }
     );
 

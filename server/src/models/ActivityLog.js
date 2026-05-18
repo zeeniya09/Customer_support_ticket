@@ -2,9 +2,8 @@ const mongoose = require('mongoose');
 
 const activityLogSchema = new mongoose.Schema(
   {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+    userId: {
+      type: Number,
       required: true,
     },
     action: {
@@ -27,13 +26,13 @@ const activityLogSchema = new mongoose.Schema(
       ],
     },
     entity: { type: String, required: true }, // e.g. 'Ticket', 'User'
-    entityId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    entityId: { type: Number, required: true },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }
 );
 
 activityLogSchema.index({ createdAt: -1 });
-activityLogSchema.index({ user: 1 });
+activityLogSchema.index({ userId: 1 });
 
 module.exports = mongoose.model('ActivityLog', activityLogSchema);

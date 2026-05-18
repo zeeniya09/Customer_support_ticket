@@ -2,14 +2,13 @@ const mongoose = require('mongoose');
 
 const attachmentSchema = new mongoose.Schema(
   {
-    ticket: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Ticket',
+    ticketId: {
+      type: Number,
       required: true,
+      index: true,
     },
-    uploader: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+    uploadedById: {
+      type: Number,
       required: true,
     },
     filename: { type: String, required: true },

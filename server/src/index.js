@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 
 const connectDB = require('./config/db');
+const { connectMySQL, sequelize } = require('./config/mysql');
 const errorHandler = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const initSocket = require('./socket');
@@ -78,7 +79,15 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
-  await connectDB();
+  // Connect both databases (Polyglot)
+  await connectDB(); // MongoDB
+  await connectMySQL(); // MySQL
+  
+  // Sync SQL tables safely
+  if (process.env.NODE_ENV === 'development') {
+    await sequelize.sync({ alter: true }); 
+    console.log('✅ MySQL tables synchronized successfully.');
+  }
 
   server.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);

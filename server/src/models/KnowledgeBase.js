@@ -10,9 +10,8 @@ const knowledgeBaseSchema = new mongoose.Schema(
       enum: ['getting_started', 'billing', 'technical', 'faq', 'policies', 'other'],
       default: 'faq',
     },
-    author: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+    authorId: {
+      type: Number,
       required: true,
     },
     published: { type: Boolean, default: false },

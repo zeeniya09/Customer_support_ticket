@@ -1,5 +1,6 @@
-const KnowledgeBase = require('../models/KnowledgeBase');
-const ActivityLog = require('../models/ActivityLog');
+const KnowledgeBase = require('../models/KnowledgeBase'); // MongoDB
+const ActivityLog = require('../models/ActivityLog'); // MongoDB
+const User = require('../models/sql/User'); // MySQL
 
 // GET /api/kb
 exports.getArticles = async (req, res, next) => {
@@ -18,15 +19,25 @@ exports.getArticles = async (req, res, next) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [articles, total] = await Promise.all([
       KnowledgeBase.find(filter)
-        .populate('author', 'name')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
       KnowledgeBase.countDocuments(filter),
     ]);
 
+    // Cross DB User fetch
+    const authorIds = [...new Set(articles.map(a => a.authorId))];
+    const users = await User.findAll({ where: { id: authorIds }, attributes: ['id', 'name'] });
+    const userMap = users.reduce((acc, u) => { acc[u.id] = u; return acc; }, {});
+    
+    const populated = articles.map(a => {
+      const aObj = a.toObject();
+      aObj.author = userMap[a.authorId] || null;
+      return aObj;
+    });
+
     res.json({
-      articles,
+      articles: populated,
       pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
@@ -37,18 +48,21 @@ exports.getArticles = async (req, res, next) => {
 // GET /api/kb/:slug
 exports.getArticle = async (req, res, next) => {
   try {
-    const article = await KnowledgeBase.findOne({ slug: req.params.slug })
-      .populate('author', 'name');
+    const article = await KnowledgeBase.findOne({ slug: req.params.slug });
 
     if (!article) {
       return res.status(404).json({ message: 'Article not found' });
     }
 
+    const author = await User.findByPk(article.authorId, { attributes: ['id', 'name'] });
+    const popArticle = article.toObject();
+    popArticle.author = author;
+
     // Increment views
     article.views += 1;
     await article.save();
 
-    res.json({ article });
+    res.json({ article: popArticle });
   } catch (error) {
     next(error);
   }
@@ -64,14 +78,14 @@ exports.createArticle = async (req, res, next) => {
       content,
       category: category || 'faq',
       published: published !== undefined ? published : false,
-      author: req.user._id,
+      authorId: req.user.id,
     });
 
     await ActivityLog.create({
-      user: req.user._id,
+      userId: req.user.id,
       action: 'kb_article_created',
       entity: 'KnowledgeBase',
-      entityId: article._id,
+      entityId: article._id, // Mongo ID stays inside Mongo
     });
 
     res.status(201).json({ message: 'Article created', article });
@@ -93,7 +107,7 @@ exports.updateArticle = async (req, res, next) => {
     if (!article) return res.status(404).json({ message: 'Article not found' });
 
     await ActivityLog.create({
-      user: req.user._id,
+      userId: req.user.id,
       action: 'kb_article_updated',
       entity: 'KnowledgeBase',
       entityId: article._id,
