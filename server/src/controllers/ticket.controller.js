@@ -1,11 +1,10 @@
-const Ticket = require('../models/sql/Ticket');
-const User = require('../models/sql/User');
-const Notification = require('../models/Notification'); // MongoDB
-const ActivityLog = require('../models/ActivityLog'); // MongoDB
+const Ticket = require('../models/Ticket'); // Now MongoDB
+const User = require('../models/sql/User'); // Still SQL
+const Notification = require('../models/Notification');
+const ActivityLog = require('../models/ActivityLog');
 const { calculateSLADeadline } = require('../config/sla');
 const { detectCategory, detectPriority } = require('../services/ai.service');
 const { sendEmail, emailTemplates } = require('../services/email.service');
-const { Op } = require('sequelize');
 
 // GET /api/tickets
 exports.getTickets = async (req, res, next) => {
@@ -26,32 +25,48 @@ exports.getTickets = async (req, res, next) => {
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (category) filter.category = category;
-    if (assignedAgent && req.user.role === 'admin') filter.assignedAgentId = assignedAgent;
+    if (assignedAgent && req.user.role === 'admin') filter.assignedAgentId = parseInt(assignedAgent);
+    
     if (search) {
-      filter[Op.or] = [
-        { title: { [Op.like]: `%${search}%` } },
-        { description: { [Op.like]: `%${search}%` } }
-      ];
+      filter.$text = { $search: search };
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (parseInt(page) - 1) * parseInt(limit);
     
     const [tickets, total] = await Promise.all([
-      Ticket.findAll({
-        where: filter,
-        include: [
-          { model: User, as: 'customer', attributes: ['id', 'name', 'email'] },
-          { model: User, as: 'assignedAgent', attributes: ['id', 'name', 'email'] }
-        ],
-        order: [['createdAt', 'DESC']],
-        offset: offset,
-        limit: parseInt(limit),
-      }),
-      Ticket.count({ where: filter }),
+      Ticket.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Ticket.countDocuments(filter),
     ]);
 
+    // Polyglot Join: Fetch User info from SQL for each ticket
+    const userIds = new Set();
+    tickets.forEach(t => {
+      if (t.customerId) userIds.add(t.customerId);
+      if (t.assignedAgentId) userIds.add(t.assignedAgentId);
+    });
+
+    const users = await User.findAll({
+      where: { id: Array.from(userIds) },
+      attributes: ['id', 'name', 'email', 'avatar']
+    });
+
+    const userMap = users.reduce((acc, u) => {
+      acc[u.id] = u;
+      return acc;
+    }, {});
+
+    const populatedTickets = tickets.map(t => {
+      const ticketObj = t.toObject();
+      ticketObj.customer = userMap[t.customerId] || null;
+      ticketObj.assignedAgent = userMap[t.assignedAgentId] || null;
+      return ticketObj;
+    });
+
     res.json({
-      tickets,
+      tickets: populatedTickets,
       pagination: {
         total,
         page: parseInt(page),
@@ -66,12 +81,7 @@ exports.getTickets = async (req, res, next) => {
 // GET /api/tickets/:id
 exports.getTicket = async (req, res, next) => {
   try {
-    const ticket = await Ticket.findByPk(req.params.id, {
-      include: [
-        { model: User, as: 'customer', attributes: ['id', 'name', 'email', 'avatar'] },
-        { model: User, as: 'assignedAgent', attributes: ['id', 'name', 'email', 'avatar'] }
-      ]
-    });
+    const ticket = await Ticket.findById(req.params.id);
 
     if (!ticket) {
       return res.status(404).json({ message: 'Ticket not found' });
@@ -85,7 +95,25 @@ exports.getTicket = async (req, res, next) => {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    res.json({ ticket });
+    // Fetch related Users from SQL
+    const userIds = [ticket.customerId];
+    if (ticket.assignedAgentId) userIds.push(ticket.assignedAgentId);
+
+    const users = await User.findAll({
+      where: { id: userIds },
+      attributes: ['id', 'name', 'email', 'avatar']
+    });
+
+    const userMap = users.reduce((acc, u) => {
+      acc[u.id] = u;
+      return acc;
+    }, {});
+
+    const ticketObj = ticket.toObject();
+    ticketObj.customer = userMap[ticket.customerId] || null;
+    ticketObj.assignedAgent = userMap[ticket.assignedAgentId] || null;
+
+    res.json({ ticket: ticketObj });
   } catch (error) {
     next(error);
   }
@@ -96,18 +124,15 @@ exports.createTicket = async (req, res, next) => {
   try {
     let { title, description, category, priority } = req.body;
 
-    // AI auto-detect if not provided
+    // AI auto-detect
     if (!category) category = detectCategory(title, description);
     if (!priority) priority = detectPriority(title, description);
 
     const slaDeadline = calculateSLADeadline(priority);
-
-    // Generate ticket ID
-    const randomNum = Math.floor(10000 + Math.random() * 90000);
-    const ticketIdStr = `TKT-${randomNum}`;
+    const ticketId = `TKT-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const ticket = await Ticket.create({
-      ticketId: ticketIdStr,
+      ticketId,
       title,
       description,
       category,
@@ -116,12 +141,11 @@ exports.createTicket = async (req, res, next) => {
       slaDeadline,
     });
 
-    // Cross-DB write: Save log to MongoDB tracking the MySQL ticket
     await ActivityLog.create({
       userId: req.user.id,
       action: 'ticket_created',
       entity: 'Ticket',
-      entityId: ticket.id,
+      entityId: ticket.ticketId, // Using the business ID for logging
     });
 
     // Email notification
@@ -132,12 +156,7 @@ exports.createTicket = async (req, res, next) => {
     const io = req.app.get('io');
     if (io) io.emit('ticket:updated', { action: 'created', ticket });
 
-    // Fetch eager loaded version to pass to frontend cleanly
-    const fullTicket = await Ticket.findByPk(ticket.id, {
-      include: [{ model: User, as: 'customer', attributes: ['id', 'name', 'email'] }]
-    });
-
-    res.status(201).json({ message: 'Ticket created', ticket: fullTicket });
+    res.status(201).json({ message: 'Ticket created', ticket });
   } catch (error) {
     next(error);
   }
@@ -146,7 +165,7 @@ exports.createTicket = async (req, res, next) => {
 // PATCH /api/tickets/:id
 exports.updateTicket = async (req, res, next) => {
   try {
-    const ticket = await Ticket.findByPk(req.params.id);
+    const ticket = await Ticket.findById(req.params.id);
     if (!ticket) {
       return res.status(404).json({ message: 'Ticket not found' });
     }
@@ -161,10 +180,8 @@ exports.updateTicket = async (req, res, next) => {
       }
     }
 
-    // Recalculate SLA if priority changes
     if (updates.priority && updates.priority !== ticket.priority) {
       ticket.slaDeadline = calculateSLADeadline(updates.priority);
-      updates.slaDeadline = ticket.slaDeadline;
     }
 
     await ticket.save();
@@ -173,31 +190,24 @@ exports.updateTicket = async (req, res, next) => {
       userId: req.user.id,
       action: 'ticket_updated',
       entity: 'Ticket',
-      entityId: ticket.id,
+      entityId: ticket.ticketId,
       metadata: updates,
     });
 
-    // Notify customer in MongoDB
+    // Notify customer
     if (ticket.customerId) {
       await Notification.create({
         userId: ticket.customerId,
         type: 'ticket_updated',
         message: `Your ticket ${ticket.ticketId} has been updated`,
-        link: `/tickets/${ticket.id}`,
+        link: `/tickets/${ticket._id}`,
       });
     }
 
-    const fullTicket = await Ticket.findByPk(ticket.id, {
-      include: [
-        { model: User, as: 'customer', attributes: ['id', 'name', 'email'] },
-        { model: User, as: 'assignedAgent', attributes: ['id', 'name', 'email'] }
-      ]
-    });
-
     const io = req.app.get('io');
-    if (io) io.emit('ticket:updated', { action: 'updated', ticket: fullTicket });
+    if (io) io.emit('ticket:updated', { action: 'updated', ticket });
 
-    res.json({ message: 'Ticket updated', ticket: fullTicket });
+    res.json({ message: 'Ticket updated', ticket });
   } catch (error) {
     next(error);
   }
@@ -207,13 +217,13 @@ exports.updateTicket = async (req, res, next) => {
 exports.assignTicket = async (req, res, next) => {
   try {
     const { agentId } = req.body;
-    const ticket = await Ticket.findByPk(req.params.id);
+    const ticket = await Ticket.findById(req.params.id);
 
     if (!ticket) {
       return res.status(404).json({ message: 'Ticket not found' });
     }
 
-    ticket.assignedAgentId = agentId;
+    ticket.assignedAgentId = parseInt(agentId);
     if (ticket.status === 'open') ticket.status = 'in_progress';
     await ticket.save();
 
@@ -221,23 +231,16 @@ exports.assignTicket = async (req, res, next) => {
       userId: req.user.id,
       action: 'ticket_assigned',
       entity: 'Ticket',
-      entityId: ticket.id,
+      entityId: ticket.ticketId,
       metadata: { agentId },
     });
 
-    // Notify agent using MongoDB
+    // Notify agent
     await Notification.create({
       userId: agentId,
       type: 'ticket_assigned',
       message: `Ticket ${ticket.ticketId} has been assigned to you`,
-      link: `/tickets/${ticket.id}`,
-    });
-
-    const fullTicket = await Ticket.findByPk(ticket.id, {
-      include: [
-        { model: User, as: 'customer', attributes: ['id', 'name'] },
-        { model: User, as: 'assignedAgent', attributes: ['id', 'name'] }
-      ]
+      link: `/tickets/${ticket._id}`,
     });
 
     const io = req.app.get('io');
@@ -245,10 +248,10 @@ exports.assignTicket = async (req, res, next) => {
       io.to(`user_${agentId}`).emit('notification:new', {
         message: `New ticket assigned: ${ticket.ticketId}`,
       });
-      io.emit('ticket:updated', { action: 'assigned', ticket: fullTicket });
+      io.emit('ticket:updated', { action: 'assigned', ticket });
     }
 
-    res.json({ message: 'Ticket assigned', ticket: fullTicket });
+    res.json({ message: 'Ticket assigned', ticket });
   } catch (error) {
     next(error);
   }
@@ -258,7 +261,7 @@ exports.assignTicket = async (req, res, next) => {
 exports.rateTicket = async (req, res, next) => {
   try {
     const { rating, feedback } = req.body;
-    const ticket = await Ticket.findByPk(req.params.id);
+    const ticket = await Ticket.findById(req.params.id);
 
     if (!ticket) {
       return res.status(404).json({ message: 'Ticket not found' });
@@ -272,15 +275,14 @@ exports.rateTicket = async (req, res, next) => {
       return res.status(400).json({ message: 'Can only rate resolved or closed tickets' });
     }
 
-    ticket.satisfactionRating = rating;
-    ticket.satisfactionFeedback = feedback || '';
+    ticket.satisfaction = { rating, feedback: feedback || '' };
     await ticket.save();
 
     await ActivityLog.create({
       userId: req.user.id,
       action: 'rating_submitted',
       entity: 'Ticket',
-      entityId: ticket.id,
+      entityId: ticket.ticketId,
       metadata: { rating, feedback },
     });
 

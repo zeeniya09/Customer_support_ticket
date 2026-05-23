@@ -2,65 +2,64 @@ const mongoose = require('mongoose');
 
 const ticketSchema = new mongoose.Schema(
   {
-    ticketId: { type: String, unique: true },
-    title: { type: String, required: true, trim: true },
-    description: { type: String, required: true },
+    ticketId: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      required: true,
+    },
     category: {
       type: String,
-      enum: [
-        'billing',
-        'technical',
-        'general',
-        'account',
-        'bug',
-        'feature_request',
-        'other',
-      ],
-      default: 'general',
+      enum: ['billing', 'technical_issue', 'account_access', 'feature_request', 'general_inquiry', 'uncategorized'],
+      default: 'uncategorized',
     },
     priority: {
       type: String,
       enum: ['low', 'medium', 'high', 'critical'],
-      default: 'medium',
+      default: 'low',
     },
     status: {
       type: String,
-      enum: ['open', 'in_progress', 'resolved', 'closed'],
+      enum: ['open', 'in_progress', 'resolved', 'closed', 'escalated'],
       default: 'open',
     },
-    customer: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+    // Polyglot link: References SQL User internal ID (Number)
+    customerId: {
+      type: Number,
       required: true,
+      index: true,
     },
-    assignedAgent: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      default: null,
+    assignedAgentId: {
+      type: Number,
+      index: true,
     },
-    slaDeadline: { type: Date },
+    slaDeadline: {
+      type: Date,
+    },
     satisfaction: {
-      rating: { type: Number, min: 1, max: 5, default: null },
-      feedback: { type: String, default: '' },
+      rating: { type: Number, min: 1, max: 5 },
+      feedback: { type: String },
     },
-    tags: [{ type: String }],
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-// Auto-generate ticketId before save
-ticketSchema.pre('save', async function (next) {
-  if (!this.ticketId) {
-    const count = await mongoose.model('Ticket').countDocuments();
-    this.ticketId = `TKT-${String(count + 1).padStart(5, '0')}`;
-  }
-  next();
-});
+// Indexes for faster lookups
+ticketSchema.index({ ticketId: 1 });
+ticketSchema.index({ status: 1 });
+ticketSchema.index({ category: 1 });
 
-// Index for search and filtering
-ticketSchema.index({ status: 1, priority: 1 });
-ticketSchema.index({ customer: 1 });
-ticketSchema.index({ assignedAgent: 1 });
+// Full-text search index for search functionality
 ticketSchema.index({ title: 'text', description: 'text' });
 
 module.exports = mongoose.model('Ticket', ticketSchema);
