@@ -2,3 +2,9 @@ node_modules/
 .env
 uploads/
 dist/
+
+# Dev debug artifacts
+server/err.json
+server/err.log
+server/test_boot.js
+server/verify_test.js

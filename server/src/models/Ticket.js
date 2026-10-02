@@ -18,8 +18,8 @@ const ticketSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: ['billing', 'technical_issue', 'account_access', 'feature_request', 'general_inquiry', 'uncategorized'],
-      default: 'uncategorized',
+      enum: ['technical', 'billing', 'account', 'general'],
+      default: 'general',
     },
     priority: {
       type: String,
@@ -31,18 +31,16 @@ const ticketSchema = new mongoose.Schema(
       enum: ['open', 'in_progress', 'resolved', 'closed', 'escalated'],
       default: 'open',
     },
-    // Polyglot link: References SQL User internal ID (Number)
     customerId: {
-      type: Number,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
       required: true,
       index: true,
     },
     assignedAgentId: {
-      type: Number,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
       index: true,
-    },
-    slaDeadline: {
-      type: Date,
     },
     satisfaction: {
       rating: { type: Number, min: 1, max: 5 },
@@ -55,7 +53,6 @@ const ticketSchema = new mongoose.Schema(
 );
 
 // Indexes for faster lookups
-ticketSchema.index({ ticketId: 1 });
 ticketSchema.index({ status: 1 });
 ticketSchema.index({ category: 1 });
 

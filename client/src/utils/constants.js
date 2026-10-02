@@ -1,7 +1,7 @@
 export const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
 export const TICKET_PRIORITIES = ['low', 'medium', 'high', 'critical'];
 export const TICKET_CATEGORIES = [
-  'billing', 'technical', 'general', 'account', 'bug', 'feature_request', 'other',
+  'technical', 'billing', 'account', 'general',
 ];
 export const ROLES = ['customer', 'agent', 'admin'];
 

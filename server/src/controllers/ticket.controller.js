@@ -1,10 +1,5 @@
-const Ticket = require('../models/Ticket'); // Now MongoDB
-const User = require('../models/sql/User'); // Still SQL
-const Notification = require('../models/Notification');
-const ActivityLog = require('../models/ActivityLog');
-const { calculateSLADeadline } = require('../config/sla');
-const { detectCategory, detectPriority } = require('../services/ai.service');
-const { sendEmail, emailTemplates } = require('../services/email.service');
+const Ticket = require('../models/Ticket');
+const User = require('../models/User');
 
 // GET /api/tickets
 exports.getTickets = async (req, res, next) => {
@@ -12,20 +7,22 @@ exports.getTickets = async (req, res, next) => {
     const { status, priority, category, assignedAgent, search, page = 1, limit = 20 } = req.query;
     const filter = {};
 
+    const userId = req.user._id || req.user.id;
+
     // Customers see only their own tickets
     if (req.user.role === 'customer') {
-      filter.customerId = req.user.id;
+      filter.customerId = userId;
     }
 
     // Agents see only their assigned tickets
     if (req.user.role === 'agent') {
-      filter.assignedAgentId = req.user.id;
+      filter.assignedAgentId = userId;
     }
 
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (category) filter.category = category;
-    if (assignedAgent && req.user.role === 'admin') filter.assignedAgentId = parseInt(assignedAgent);
+    if (assignedAgent && req.user.role === 'admin') filter.assignedAgentId = assignedAgent;
     
     if (search) {
       filter.$text = { $search: search };
@@ -35,34 +32,19 @@ exports.getTickets = async (req, res, next) => {
     
     const [tickets, total] = await Promise.all([
       Ticket.find(filter)
+        .populate('customerId', 'name email avatar role')
+        .populate('assignedAgentId', 'name email avatar role')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
       Ticket.countDocuments(filter),
     ]);
 
-    // Polyglot Join: Fetch User info from SQL for each ticket
-    const userIds = new Set();
-    tickets.forEach(t => {
-      if (t.customerId) userIds.add(t.customerId);
-      if (t.assignedAgentId) userIds.add(t.assignedAgentId);
-    });
-
-    const users = await User.findAll({
-      where: { id: Array.from(userIds) },
-      attributes: ['id', 'name', 'email', 'avatar']
-    });
-
-    const userMap = users.reduce((acc, u) => {
-      acc[u.id] = u;
-      return acc;
-    }, {});
-
     const populatedTickets = tickets.map(t => {
-      const ticketObj = t.toObject();
-      ticketObj.customer = userMap[t.customerId] || null;
-      ticketObj.assignedAgent = userMap[t.assignedAgentId] || null;
-      return ticketObj;
+      const tObj = t.toObject();
+      tObj.customer = t.customerId;
+      tObj.assignedAgent = t.assignedAgentId;
+      return tObj;
     });
 
     res.json({
@@ -81,37 +63,25 @@ exports.getTickets = async (req, res, next) => {
 // GET /api/tickets/:id
 exports.getTicket = async (req, res, next) => {
   try {
-    const ticket = await Ticket.findById(req.params.id);
+    const ticket = await Ticket.findById(req.params.id)
+      .populate('customerId', 'name email avatar role')
+      .populate('assignedAgentId', 'name email avatar role');
 
     if (!ticket) {
       return res.status(404).json({ message: 'Ticket not found' });
     }
 
+    const userId = (req.user._id || req.user.id).toString();
+    const ticketCustId = ticket.customerId?._id?.toString() || ticket.customerId?.toString();
+
     // Customers can only see their own tickets
-    if (
-      req.user.role === 'customer' &&
-      ticket.customerId !== req.user.id
-    ) {
+    if (req.user.role === 'customer' && ticketCustId !== userId) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    // Fetch related Users from SQL
-    const userIds = [ticket.customerId];
-    if (ticket.assignedAgentId) userIds.push(ticket.assignedAgentId);
-
-    const users = await User.findAll({
-      where: { id: userIds },
-      attributes: ['id', 'name', 'email', 'avatar']
-    });
-
-    const userMap = users.reduce((acc, u) => {
-      acc[u.id] = u;
-      return acc;
-    }, {});
-
     const ticketObj = ticket.toObject();
-    ticketObj.customer = userMap[ticket.customerId] || null;
-    ticketObj.assignedAgent = userMap[ticket.assignedAgentId] || null;
+    ticketObj.customer = ticket.customerId;
+    ticketObj.assignedAgent = ticket.assignedAgentId;
 
     res.json({ ticket: ticketObj });
   } catch (error) {
@@ -122,14 +92,10 @@ exports.getTicket = async (req, res, next) => {
 // POST /api/tickets
 exports.createTicket = async (req, res, next) => {
   try {
-    let { title, description, category, priority } = req.body;
-
-    // AI auto-detect
-    if (!category) category = detectCategory(title, description);
-    if (!priority) priority = detectPriority(title, description);
-
-    const slaDeadline = calculateSLADeadline(priority);
+    let { title, description, category = 'general_inquiry', priority = 'medium' } = req.body;
     const ticketId = `TKT-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const userId = req.user._id || req.user.id;
 
     const ticket = await Ticket.create({
       ticketId,
@@ -137,26 +103,13 @@ exports.createTicket = async (req, res, next) => {
       description,
       category,
       priority,
-      customerId: req.user.id,
-      slaDeadline,
+      customerId: userId,
     });
 
-    await ActivityLog.create({
-      userId: req.user.id,
-      action: 'ticket_created',
-      entity: 'Ticket',
-      entityId: ticket.ticketId, // Using the business ID for logging
-    });
+    const populatedTicket = await Ticket.findById(ticket._id)
+      .populate('customerId', 'name email avatar role');
 
-    // Email notification
-    const tmpl = emailTemplates.ticketCreated(ticket);
-    sendEmail({ to: req.user.email, ...tmpl });
-
-    // Real-time broadcast
-    const io = req.app.get('io');
-    if (io) io.emit('ticket:updated', { action: 'created', ticket });
-
-    res.status(201).json({ message: 'Ticket created', ticket });
+    res.status(201).json({ message: 'Ticket created', ticket: populatedTicket });
   } catch (error) {
     next(error);
   }
@@ -171,43 +124,20 @@ exports.updateTicket = async (req, res, next) => {
     }
 
     const allowedUpdates = ['title', 'description', 'category', 'priority', 'status'];
-    const updates = {};
 
     for (const key of allowedUpdates) {
       if (req.body[key] !== undefined) {
-        updates[key] = req.body[key];
         ticket[key] = req.body[key];
       }
     }
 
-    if (updates.priority && updates.priority !== ticket.priority) {
-      ticket.slaDeadline = calculateSLADeadline(updates.priority);
-    }
-
     await ticket.save();
 
-    await ActivityLog.create({
-      userId: req.user.id,
-      action: 'ticket_updated',
-      entity: 'Ticket',
-      entityId: ticket.ticketId,
-      metadata: updates,
-    });
+    const updatedTicket = await Ticket.findById(ticket._id)
+      .populate('customerId', 'name email avatar role')
+      .populate('assignedAgentId', 'name email avatar role');
 
-    // Notify customer
-    if (ticket.customerId) {
-      await Notification.create({
-        userId: ticket.customerId,
-        type: 'ticket_updated',
-        message: `Your ticket ${ticket.ticketId} has been updated`,
-        link: `/tickets/${ticket._id}`,
-      });
-    }
-
-    const io = req.app.get('io');
-    if (io) io.emit('ticket:updated', { action: 'updated', ticket });
-
-    res.json({ message: 'Ticket updated', ticket });
+    res.json({ message: 'Ticket updated', ticket: updatedTicket });
   } catch (error) {
     next(error);
   }
@@ -223,35 +153,15 @@ exports.assignTicket = async (req, res, next) => {
       return res.status(404).json({ message: 'Ticket not found' });
     }
 
-    ticket.assignedAgentId = parseInt(agentId);
+    ticket.assignedAgentId = agentId || req.user._id;
     if (ticket.status === 'open') ticket.status = 'in_progress';
     await ticket.save();
 
-    await ActivityLog.create({
-      userId: req.user.id,
-      action: 'ticket_assigned',
-      entity: 'Ticket',
-      entityId: ticket.ticketId,
-      metadata: { agentId },
-    });
+    const updatedTicket = await Ticket.findById(ticket._id)
+      .populate('customerId', 'name email avatar role')
+      .populate('assignedAgentId', 'name email avatar role');
 
-    // Notify agent
-    await Notification.create({
-      userId: agentId,
-      type: 'ticket_assigned',
-      message: `Ticket ${ticket.ticketId} has been assigned to you`,
-      link: `/tickets/${ticket._id}`,
-    });
-
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`user_${agentId}`).emit('notification:new', {
-        message: `New ticket assigned: ${ticket.ticketId}`,
-      });
-      io.emit('ticket:updated', { action: 'assigned', ticket });
-    }
-
-    res.json({ message: 'Ticket assigned', ticket });
+    res.json({ message: 'Ticket assigned', ticket: updatedTicket });
   } catch (error) {
     next(error);
   }
@@ -267,7 +177,10 @@ exports.rateTicket = async (req, res, next) => {
       return res.status(404).json({ message: 'Ticket not found' });
     }
 
-    if (ticket.customerId !== req.user.id) {
+    const userId = (req.user._id || req.user.id).toString();
+    const ticketCustId = ticket.customerId.toString();
+
+    if (ticketCustId !== userId) {
       return res.status(403).json({ message: 'Only the ticket creator can rate' });
     }
 
@@ -278,16 +191,9 @@ exports.rateTicket = async (req, res, next) => {
     ticket.satisfaction = { rating, feedback: feedback || '' };
     await ticket.save();
 
-    await ActivityLog.create({
-      userId: req.user.id,
-      action: 'rating_submitted',
-      entity: 'Ticket',
-      entityId: ticket.ticketId,
-      metadata: { rating, feedback },
-    });
-
     res.json({ message: 'Rating submitted', ticket });
   } catch (error) {
     next(error);
   }
 };
+

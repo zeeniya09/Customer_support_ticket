@@ -11,18 +11,14 @@ const navLinks = {
   customer: [
     { to: '/dashboard', icon: HiOutlineHome, label: 'Dashboard' },
     { to: '/tickets/new', icon: HiOutlinePlusCircle, label: 'New Ticket' },
-    { to: '/knowledge-base', icon: HiOutlineBookOpen, label: 'Help Center' },
   ],
   agent: [
     { to: '/dashboard', icon: HiOutlineHome, label: 'Dashboard' },
-    { to: '/knowledge-base', icon: HiOutlineBookOpen, label: 'Knowledge Base' },
   ],
   admin: [
     { to: '/dashboard', icon: HiOutlineHome, label: 'Dashboard' },
     { to: '/tickets/new', icon: HiOutlinePlusCircle, label: 'New Ticket' },
-    { to: '/analytics', icon: HiOutlineChartBar, label: 'Analytics' },
     { to: '/users', icon: HiOutlineUsers, label: 'Users' },
-    { to: '/knowledge-base', icon: HiOutlineBookOpen, label: 'Knowledge Base' },
   ],
 };
 
@@ -30,7 +26,8 @@ export default function Sidebar() {
   const { user, logout } = useContext(AuthContext);
   const navigate = useNavigate();
   const location = useLocation();
-  const links = navLinks[user?.role] || navLinks.customer;
+  const role = user?.role?.trim().replace(/^["']|["']+$/g, '').toLowerCase();
+  const links = navLinks[role] || navLinks.customer;
 
   const handleLogout = () => {
     logout();

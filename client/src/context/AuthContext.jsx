@@ -1,10 +1,28 @@
 import { createContext, useState, useEffect } from 'react';
 import API from '../api/axios';
 
+const normalizeUser = (userData) => {
+  if (!userData) return null;
+  const role = typeof userData.role === 'string'
+    ? userData.role.trim().replace(/^["']|["']+$/g, '').toLowerCase()
+    : userData.role;
+  return { ...userData, role };
+};
+
 export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    const savedUser = localStorage.getItem('user');
+    if (savedUser) {
+      try {
+        return normalizeUser(JSON.parse(savedUser));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
@@ -17,7 +35,9 @@ export function AuthProvider({ children }) {
       }
       try {
         const { data } = await API.get('/auth/me');
-        setUser(data.user);
+        const normalized = normalizeUser(data.user);
+        setUser(normalized);
+        localStorage.setItem('user', JSON.stringify(normalized));
       } catch {
         logout();
       } finally {
@@ -29,19 +49,21 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await API.post('/auth/login', { email, password });
+    const normalized = normalizeUser(data.user);
     localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
+    localStorage.setItem('user', JSON.stringify(normalized));
     setToken(data.token);
-    setUser(data.user);
+    setUser(normalized);
     return data;
   };
 
   const register = async (name, email, password) => {
     const { data } = await API.post('/auth/register', { name, email, password });
+    const normalized = normalizeUser(data.user);
     localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
+    localStorage.setItem('user', JSON.stringify(normalized));
     setToken(data.token);
-    setUser(data.user);
+    setUser(normalized);
     return data;
   };
 

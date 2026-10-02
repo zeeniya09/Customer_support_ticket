@@ -1,6 +1,4 @@
-const User = require('../models/sql/User'); // MySQL
-const ActivityLog = require('../models/ActivityLog'); // MongoDB
-const { Op } = require('sequelize');
+const User = require('../models/User'); // MongoDB
 
 // GET /api/users
 exports.getUsers = async (req, res, next) => {
@@ -10,27 +8,30 @@ exports.getUsers = async (req, res, next) => {
 
     if (role) filter.role = role;
     if (search) {
-      filter[Op.or] = [
-        { name: { [Op.like]: `%${search}%` } },
-        { email: { [Op.like]: `%${search}%` } },
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
       ];
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Sequelize parallel querying
     const [users, total] = await Promise.all([
-      User.findAll({
-        where: filter,
-        order: [['createdAt', 'DESC']],
-        offset: offset,
-        limit: parseInt(limit),
-      }),
-      User.count({ where: filter }),
+      User.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      User.countDocuments(filter),
     ]);
 
+    const mappedUsers = users.map(u => {
+      const uObj = u.toJSON();
+      uObj.id = u._id;
+      return uObj;
+    });
+
     res.json({
-      users,
+      users: mappedUsers,
       pagination: {
         total,
         page: parseInt(page),
@@ -45,9 +46,11 @@ exports.getUsers = async (req, res, next) => {
 // GET /api/users/:id
 exports.getUser = async (req, res, next) => {
   try {
-    const user = await User.findByPk(req.params.id);
+    const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ user });
+    const uObj = user.toJSON();
+    uObj.id = user._id;
+    res.json({ user: uObj });
   } catch (error) {
     next(error);
   }
@@ -61,23 +64,18 @@ exports.updateRole = async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid role' });
     }
 
-    const user = await User.findByPk(req.params.id);
+    const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     
     user.role = role;
     await user.save();
 
-    // Log the change in MongoDB for the MySQL user
-    await ActivityLog.create({
-      userId: req.user.id,
-      action: 'user_role_changed',
-      entity: 'User',
-      entityId: user.id,
-      metadata: { newRole: role },
-    });
+    const uObj = user.toJSON();
+    uObj.id = user._id;
 
-    res.json({ message: 'User role updated', user });
+    res.json({ message: 'User role updated', user: uObj });
   } catch (error) {
     next(error);
   }
 };
+

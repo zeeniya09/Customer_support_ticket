@@ -3,12 +3,14 @@ const mongoose = require('mongoose');
 const commentSchema = new mongoose.Schema(
   {
     ticketId: {
-      type: Number,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Ticket',
       required: true,
-      index: true,
+
     },
     authorId: {
-      type: Number,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
       required: true,
     },
     body: { type: String, required: true },
@@ -17,6 +19,6 @@ const commentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-commentSchema.index({ ticket: 1, createdAt: 1 });
+commentSchema.index({ ticketId: 1, createdAt: 1 });
 
 module.exports = mongoose.model('Comment', commentSchema);

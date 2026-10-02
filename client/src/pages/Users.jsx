@@ -78,7 +78,7 @@ export default function Users() {
                 </td>
                 <td style={{ padding: '12px 16px', color: '#64748b' }}>{u.email}</td>
                 <td style={{ padding: '12px 16px' }}>
-                  <select className="select" value={u.role} onChange={(e) => changeRole(u._id, e.target.value)}
+                  <select className="select" value={u.role?.trim().replace(/^["']|["']+$/g, '').toLowerCase() || 'customer'} onChange={(e) => changeRole(u._id, e.target.value)}
                     style={{ padding: '4px 8px', fontSize: '0.8rem', width: 'auto' }}>
                     <option value="customer">Customer</option>
                     <option value="agent">Agent</option>

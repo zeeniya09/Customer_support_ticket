@@ -35,11 +35,20 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
+// Alias matchPassword for compatibility
+userSchema.methods.matchPassword = function (candidatePassword) {
+  return this.comparePassword(candidatePassword);
+};
+
 // Remove password from JSON
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password;
+  if (!obj.avatar) {
+    obj.avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(obj.name)}`;
+  }
   return obj;
 };
 
 module.exports = mongoose.model('User', userSchema);
+

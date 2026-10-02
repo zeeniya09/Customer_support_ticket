@@ -1,9 +1,8 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/sql/User'); // MySQL
-const ActivityLog = require('../models/ActivityLog'); // MongoDB
+const User = require('../models/User'); // MongoDB
 
 const generateToken = (user) => {
-  return jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, {
+  return jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
@@ -13,8 +12,7 @@ exports.register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
 
-    // Sequelize syntax
-    const existingUser = await User.findOne({ where: { email } });
+    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
     if (existingUser) {
       return res.status(409).json({ message: 'Email already registered' });
     }
@@ -22,18 +20,13 @@ exports.register = async (req, res, next) => {
     const user = await User.create({ name, email, password });
     const token = generateToken(user);
 
-    // Activity Log remains in MongoDB and references MySQL user ID
-    await ActivityLog.create({
-      userId: user.id,
-      action: 'user_registered',
-      entity: 'User',
-      entityId: user.id,
-    });
+    const userObj = user.toJSON();
+    userObj.id = user._id;
 
     res.status(201).json({
       message: 'Registration successful',
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: userObj,
     });
   } catch (error) {
     next(error);
@@ -45,22 +38,24 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
     if (!user) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    const isMatch = await user.matchPassword(password);
+    const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
     const token = generateToken(user);
+    const userObj = user.toJSON();
+    userObj.id = user._id;
 
     res.json({
       message: 'Login successful',
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role, avatar: user.avatar },
+      user: userObj,
     });
   } catch (error) {
     next(error);
@@ -69,6 +64,8 @@ exports.login = async (req, res, next) => {
 
 // GET /api/auth/me
 exports.getMe = async (req, res) => {
-  // Overrode toJSON in User schema so this is safe
-  res.json({ user: req.user });
+  const userObj = req.user.toJSON ? req.user.toJSON() : req.user;
+  userObj.id = req.user._id || req.user.id;
+  res.json({ user: userObj });
 };
+

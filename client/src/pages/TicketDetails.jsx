@@ -1,19 +1,17 @@
 import { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
-import { SocketContext } from '../context/SocketContext';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Loader from '../components/ui/Loader';
 import API from '../api/axios';
 import toast from 'react-hot-toast';
 import { formatDate, timeAgo } from '../utils/helpers';
 import { TICKET_STATUSES, TICKET_PRIORITIES } from '../utils/constants';
-import { HiOutlinePaperClip, HiOutlinePaperAirplane, HiOutlineStar } from 'react-icons/hi';
+import { HiOutlinePaperAirplane } from 'react-icons/hi';
 
 export default function TicketDetails() {
   const { id } = useParams();
   const { user } = useContext(AuthContext);
-  const socket = useContext(SocketContext);
   const [ticket, setTicket] = useState(null);
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
@@ -22,6 +20,7 @@ export default function TicketDetails() {
   const [rating, setRating] = useState(0);
   const [feedback, setFeedback] = useState('');
   const [loading, setLoading] = useState(true);
+  const userRole = user?.role?.trim().replace(/^["']|["']+$/g, '').toLowerCase();
 
   useEffect(() => {
     const fetchData = async () => {
@@ -30,12 +29,19 @@ export default function TicketDetails() {
           API.get(`/tickets/${id}`),
           API.get(`/tickets/${id}/comments`),
         ]);
-        setTicket(ticketRes.data.ticket);
+        const ticketData = ticketRes.data.ticket;
+        const customer = ticketData?.customer || ticketData?.customerId;
+        const assigned = ticketData?.assignedAgent || ticketData?.assignedAgentId;
+        setTicket({
+          ...ticketData,
+          customer: customer || ticketData?.customer,
+          assignedAgent: assigned || ticketData?.assignedAgent,
+        });
         setComments(commentsRes.data.comments);
 
-        if (user.role === 'admin') {
+        if (userRole === 'admin') {
           const agentRes = await API.get('/users?role=agent&limit=100');
-          setAgents(agentRes.data.users);
+          setAgents(agentRes.data.users || []);
         }
       } catch (e) {
         toast.error('Failed to load ticket');
@@ -44,21 +50,7 @@ export default function TicketDetails() {
       }
     };
     fetchData();
-  }, [id]);
-
-  // Join ticket room for real-time updates
-  useEffect(() => {
-    if (!socket || !id) return;
-    socket.emit('ticket:join', id);
-    const handler = ({ comment }) => {
-      setComments((prev) => [...prev, comment]);
-    };
-    socket.on('ticket:commented', handler);
-    return () => {
-      socket.emit('ticket:leave', id);
-      socket.off('ticket:commented', handler);
-    };
-  }, [socket, id]);
+  }, [id, userRole]);
 
   const handleComment = async (e) => {
     e.preventDefault();
@@ -77,7 +69,14 @@ export default function TicketDetails() {
   const handleStatusChange = async (status) => {
     try {
       const { data } = await API.patch(`/tickets/${id}`, { status });
-      setTicket(data.ticket);
+      const customer = data.ticket.customer || data.ticket.customerId;
+      const assigned = data.ticket.assignedAgent || data.ticket.assignedAgentId;
+      setTicket((prev) => ({
+        ...prev,
+        ...data.ticket,
+        customer: customer || prev?.customer || prev?.customerId,
+        assignedAgent: assigned || prev?.assignedAgent || prev?.assignedAgentId,
+      }));
       toast.success(`Status changed to ${status.replace('_', ' ')}`);
     } catch (err) {
       toast.error('Failed to update status');
@@ -87,7 +86,14 @@ export default function TicketDetails() {
   const handleAssign = async (agentId) => {
     try {
       const { data } = await API.post(`/tickets/${id}/assign`, { agentId });
-      setTicket(data.ticket);
+      const customer = data.ticket.customer || data.ticket.customerId;
+      const assigned = data.ticket.assignedAgent || data.ticket.assignedAgentId;
+      setTicket((prev) => ({
+        ...prev,
+        ...data.ticket,
+        customer: customer || prev?.customer || prev?.customerId,
+        assignedAgent: assigned || prev?.assignedAgent || prev?.assignedAgentId,
+      }));
       toast.success('Agent assigned');
     } catch (err) {
       toast.error('Failed to assign agent');
@@ -108,8 +114,8 @@ export default function TicketDetails() {
   if (loading) return <DashboardLayout><Loader /></DashboardLayout>;
   if (!ticket) return <DashboardLayout><p>Ticket not found</p></DashboardLayout>;
 
-  const canUpdate = user.role === 'agent' || user.role === 'admin';
-  const canRate = user.role === 'customer' && ['resolved', 'closed'].includes(ticket.status) && !ticket.satisfaction?.rating;
+  const canUpdate = userRole === 'agent' || userRole === 'admin';
+  const canRate = userRole === 'customer' && ['resolved', 'closed'].includes(ticket.status) && !ticket.satisfaction?.rating;
 
   return (
     <DashboardLayout>
@@ -240,7 +246,14 @@ export default function TicketDetails() {
                 <select className="select" value={ticket.priority} onChange={async (e) => {
                   try {
                     const { data } = await API.patch(`/tickets/${id}`, { priority: e.target.value });
-                    setTicket(data.ticket);
+                    const customer = data.ticket.customer || data.ticket.customerId;
+                    const assigned = data.ticket.assignedAgent || data.ticket.assignedAgentId;
+                    setTicket((prev) => ({
+                      ...prev,
+                      ...data.ticket,
+                      customer: customer || prev?.customer || prev?.customerId,
+                      assignedAgent: assigned || prev?.assignedAgent || prev?.assignedAgentId,
+                    }));
                   } catch (err) { toast.error('Failed'); }
                 }} style={{ fontSize: '0.8rem', padding: '6px 10px' }}>
                   {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -251,26 +264,26 @@ export default function TicketDetails() {
             </InfoRow>
 
             <InfoRow label="Category"><span style={{ textTransform: 'capitalize' }}>{ticket.category?.replace('_', ' ')}</span></InfoRow>
-            <InfoRow label="Customer">{ticket.customer?.name}</InfoRow>
+            <InfoRow label="Customer">{(ticket.customer?.name || ticket.customerId?.name) || '—'}</InfoRow>
 
             <InfoRow label="Assigned Agent">
-              {user.role === 'admin' ? (
-                <select className="select" value={ticket.assignedAgent?._id || ''} onChange={(e) => handleAssign(e.target.value)} style={{ fontSize: '0.8rem', padding: '6px 10px' }}>
+              {userRole === 'admin' ? (
+                <select
+                  className="select"
+                  value={ticket.assignedAgent?._id || ticket.assignedAgentId?._id || ticket.assignedAgent || ticket.assignedAgentId || ''}
+                  onChange={(e) => handleAssign(e.target.value)}
+                  style={{ fontSize: '0.8rem', padding: '6px 10px' }}
+                >
                   <option value="">Unassigned</option>
                   {agents.map((a) => <option key={a._id} value={a._id}>{a.name}</option>)}
                 </select>
               ) : (
-                <span>{ticket.assignedAgent?.name || 'Unassigned'}</span>
+                <span>{(ticket.assignedAgent?.name || ticket.assignedAgentId?.name) || 'Unassigned'}</span>
               )}
             </InfoRow>
 
             <InfoRow label="Created">{formatDate(ticket.createdAt)}</InfoRow>
             <InfoRow label="Updated">{formatDate(ticket.updatedAt)}</InfoRow>
-            <InfoRow label="SLA Deadline">
-              <span style={{ color: ticket.slaDeadline && new Date(ticket.slaDeadline) < new Date() ? '#ef4444' : 'inherit', fontWeight: 600 }}>
-                {formatDate(ticket.slaDeadline)}
-              </span>
-            </InfoRow>
 
             {ticket.satisfaction?.rating && (
               <InfoRow label="Rating">

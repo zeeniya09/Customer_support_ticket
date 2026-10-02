@@ -10,7 +10,6 @@ export default function CreateTicket() {
   const { user } = useContext(AuthContext);
   const navigate = useNavigate();
   const [form, setForm] = useState({ title: '', description: '', category: '', priority: '' });
-  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -19,16 +18,6 @@ export default function CreateTicket() {
     try {
       const { data } = await API.post('/tickets', form);
       toast.success(`Ticket ${data.ticket.ticketId} created!`);
-
-      // Upload attachment if provided
-      if (file && data.ticket._id) {
-        const formData = new FormData();
-        formData.append('file', file);
-        await API.post(`/tickets/${data.ticket._id}/attachments`, formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
-      }
-
       navigate(`/tickets/${data.ticket._id}`);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create ticket');
@@ -80,7 +69,7 @@ export default function CreateTicket() {
                   <option value="">Auto-detect</option>
                   {TICKET_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace('_', ' ')}</option>)}
                 </select>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Leave blank for AI auto-detection</span>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Optional — leave blank for default</span>
               </div>
               <div>
                 <label style={{ display: 'block', marginBottom: 6, fontSize: '0.85rem', fontWeight: 600 }}>Priority</label>
@@ -88,20 +77,10 @@ export default function CreateTicket() {
                   <option value="">Auto-detect</option>
                   {TICKET_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Leave blank for AI auto-detection</span>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Optional — defaults to low</span>
               </div>
             </div>
 
-            {/* File attachment */}
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: 'block', marginBottom: 6, fontSize: '0.85rem', fontWeight: 600 }}>Attachment (optional)</label>
-              <input
-                type="file"
-                onChange={(e) => setFile(e.target.files[0])}
-                style={{ fontSize: '0.85rem' }}
-                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.zip"
-              />
-            </div>
 
             {/* Submit */}
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
